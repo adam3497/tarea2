@@ -1,41 +1,67 @@
-#include <stdio.h>
 #include <pthread.h>
+#include <stdio.h>
 
-#include "sync.h"
+#include "sync.h" // Incluimos el archivo de encabezado que contiene las definiciones del monitor
 
-void init_monitor(Monitor *monitor) {
-    monitor->index = 0;
-    pthread_mutex_init(&monitor->mutex, NULL);
-    pthread_cond_init(&monitor->can_produce, NULL);
-    pthread_cond_init(&monitor->can_consume, NULL);
+// Inicializar el monitor
+void monitor_init(Monitor *mon) {
+    // Inicializamos tanto el contador de elementos, como los índices del buffer, a cero
+    mon->count = 0;
+    mon->in = 0; 
+    mon->out = 0;
+    // Inicializamos el mutex del monitor
+    pthread_mutex_init(&mon->mutex, NULL); 
+     // Inicializamos la variable de condición para el caso de buffer no lleno
+    pthread_cond_init(&mon->not_full, NULL);
+    // Inicializamos la variable de condición para el caso de buffer no vacío
+    pthread_cond_init(&mon->not_empty, NULL); 
 }
 
-void destroy_monitor(Monitor *monitor) {
-    pthread_mutex_destroy(&monitor->mutex);
-    pthread_cond_destroy(&monitor->can_produce);
-    pthread_cond_destroy(&monitor->can_consume);
-}
-
-void produce(Monitor *monitor, int item) {
-    pthread_mutex_lock(&monitor->mutex);
-    while (monitor->index >= BUFFER_SIZE) {
-        pthread_cond_wait(&monitor->can_produce, &monitor->mutex);
+// Productor
+void produce(Monitor *mon, int data) {
+    pthread_mutex_lock(&mon->mutex);
+    // Mientras el buffer esté lleno, esperamos
+    while (mon->count == BUFFER_SIZE) { 
+        // El wait está adentro del while con la condición deseada para evitar falsos positivos
+        // El hilo actual se manda a esperar/dormir hasta que la condición se cumpla
+        // La condición se activa cuando otro hilo en el consumidor realiza el "signal"
+        pthread_cond_wait(&mon->not_full, &mon->mutex);
     }
-    monitor->buffer[monitor->index++] = item;
-    printf("Produced: %d\n", item);
-    pthread_cond_signal(&monitor->can_consume);
-    pthread_mutex_unlock(&monitor->mutex);
+    // Insertamos el dato en el buffer
+    mon->buffer[mon->in] = data; 
+    // Actualizamos el índice de inserción
+    mon->in = (mon->in + 1) % BUFFER_SIZE; 
+    // Incremento del contador de elementos
+    mon->count++;
+    // Señalizamos que el buffer no está vacío
+    // Esto despierta a los hilos en espera en el consumidor
+    pthread_cond_signal(&mon->not_empty); 
+    pthread_mutex_unlock(&mon->mutex);
 }
 
-int consume(Monitor *monitor) {
-    pthread_mutex_lock(&monitor->mutex);
-    while (monitor->index <= 0) {
-        pthread_cond_wait(&monitor->can_consume, &monitor->mutex);
+// Consumidor
+int consume(Monitor *mon) {
+     // Variable para almacenar el dato a consumir
+    int data;
+    pthread_mutex_lock(&mon->mutex);
+    // Mientras el buffer esté vacío, esperamos
+    while (mon->count == 0) { 
+        // El wait está adentro del while con la condición deseada para evitar falsos positivos
+        // El hilo actual se manda a esperar/dormir hasta que la condición se cumpla
+        // La condición se activa cuando otro hilo en el productor realiza el "signal"
+        pthread_cond_wait(&mon->not_empty, &mon->mutex);
     }
-    int item = monitor->buffer[--monitor->index];
-    printf("Consumed: %d\n", item);
-    pthread_cond_signal(&monitor->can_produce);
-    pthread_mutex_unlock(&monitor->mutex);
-    return item;
+    // Extraemos el dato del buffer
+    data = mon->buffer[mon->out]; 
+    // Actualizamos el índice de extracción
+    mon->out = (mon->out + 1) % BUFFER_SIZE; 
+    // Disminuimos el contador de elementos en el buffer
+    mon->count--; 
+    // Señalizamos que el buffer no está lleno
+    // Esto reactiva/despierta a los hilos en el productor
+    pthread_cond_signal(&mon->not_full); 
+    pthread_mutex_unlock(&mon->mutex);
+    return data;
 }
+
 
